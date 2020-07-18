@@ -28,14 +28,14 @@ all: format build
 
 .PHONY: build
 build: ## Build binaries
-build: deps backend proxy
+build: deps bin/backend bin/proxy
 
 backend: ## Build backend binary
-backend: cmd/backend/main.go
+bin/backend: cmd/backend/main.go
 	@go build -a -tags netgo -ldflags '${LDFLAGS}' -o $@ $?
 
 proxy: ## Build proxy binary
-proxy: cmd/proxy/main.go
+bin/proxy: cmd/proxy/main.go
 	@go build -a -tags netgo -ldflags '${LDFLAGS}' -o $@ $?
 
 .PHONY: container
