@@ -3,6 +3,7 @@ module github.com/kakkoyun/observable-remote-write
 go 1.14
 
 require (
+	github.com/go-kit/kit v0.9.0
 	github.com/gogo/protobuf v1.1.1
 	github.com/golang/snappy v0.0.1
 	github.com/grpc-ecosystem/grpc-gateway v1.14.6 // indirect
