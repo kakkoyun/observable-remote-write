@@ -14,7 +14,7 @@ COPY --from=builder /opt/proxy /bin/proxy
 
 LABEL vendor="kakkoyun" \
     name="observable-remote-write-proxy" \
-    description="An application to demonstrate observability and instrumentation tools which confroms Prometheus Remote Write protocol." \
+    description="An application to demonstrate observability and instrumentation tools which conforms Prometheus Remote Write protocol." \
     maintainer="Kemal Akkoyun <kakkoyun@gmail.com>" \
     org.label-schema.description="An application to demonstrate observability and instrumentation tools which confroms Prometheus Remote Write protocol." \
     org.label-schema.docker.cmd="docker run --rm -v '$(pwd)':/app -e kakkoyun/observable-remote-write-proxy" \
