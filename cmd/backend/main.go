@@ -32,6 +32,8 @@ import (
 // gracePeriod specify graceful shutdown period.
 const gracePeriod = 10 * time.Second
 
+var errCancelled = errors.New("canceled")
+
 type config struct {
 	logLevel  string
 	logFormat string
@@ -207,6 +209,6 @@ func interrupt(logger log.Logger, cancel <-chan struct{}) error {
 		level.Info(logger).Log("msg", "caught signal. Exiting.", "signal", s)
 		return nil
 	case <-cancel:
-		return errors.New("canceled")
+		return errCancelled
 	}
 }
