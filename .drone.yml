@@ -1,0 +1,27 @@
+---
+kind: pipeline
+name: build
+
+platform:
+  os: linux
+  arch: amd64
+
+steps:
+  - name: lint
+    pull: always
+    image: golang:1.14
+    commands:
+      - make lint
+      - git diff --exit-code
+
+  - name: test
+    pull: always
+    image: golang:1.14
+    commands:
+      - make test
+
+  - name: build
+    pull: always
+    image: golang:1.14
+    commands:
+      - make build
