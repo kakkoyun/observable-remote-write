@@ -5,7 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"net/http/pprof"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/go-kit/kit/log/level"
@@ -47,6 +49,12 @@ func main() {
 	// Parse flags and initialize config struct.
 	cfg := parseFlags()
 
+	debug := os.Getenv("DEBUG") != ""
+	if debug {
+		runtime.SetMutexProfileFraction(cfg.debug.mutexProfileFraction)
+		runtime.SetBlockProfileRate(cfg.debug.blockProfileRate)
+	}
+
 	// Initialize structured logger.
 	logger := internal.NewLogger(cfg.logLevel, cfg.logFormat, cfg.debug.name)
 	defer level.Info(logger).Log("msg", "exiting")
@@ -66,9 +74,14 @@ func main() {
 	{
 		// Server listen for proxy.
 		mux := http.NewServeMux()
+
+		// Register metrics server.
 		mux.Handle("/metrics", exthttp.NewMetricsMiddleware(reg).NewHandler(
-			"/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
+			"metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
 		))
+
+		// Register pprof endpoints.
+		registerProfiler(mux)
 
 		srv := &http.Server{
 			Addr:    cfg.server.listen,
@@ -118,4 +131,12 @@ func parseFlags() config {
 	flag.Parse()
 
 	return cfg
+}
+
+func registerProfiler(mux *http.ServeMux) {
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 }
