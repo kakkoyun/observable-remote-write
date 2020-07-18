@@ -7,11 +7,15 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 	"time"
 
+	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/oklog/run"
+	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/version"
@@ -101,10 +105,28 @@ func main() {
 		})
 	}
 
+	// Listen for termination signals.
+	{
+		cancel := make(chan struct{})
+		g.Add(func() error {
+			return interrupt(logger, cancel)
+		}, func(error) {
+			close(cancel)
+		})
+	}
+
 	if err := g.Run(); err != nil {
 		level.Error(logger).Log("msg", "run group failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+func registerProfiler(mux *http.ServeMux) {
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 }
 
 // Helpers
@@ -133,10 +155,14 @@ func parseFlags() config {
 	return cfg
 }
 
-func registerProfiler(mux *http.ServeMux) {
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+func interrupt(logger log.Logger, cancel <-chan struct{}) error {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case s := <-c:
+		level.Info(logger).Log("msg", "caught signal. Exiting.", "signal", s)
+		return nil
+	case <-cancel:
+		return errors.New("canceled")
+	}
 }

@@ -8,13 +8,17 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 	"time"
 
+	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/oklog/run"
+	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/model"
@@ -89,7 +93,7 @@ func main() {
 		registerProfiler(mux)
 
 		mux.Handle("/receive", exthttp.NewMetricsMiddleware(reg).NewHandler(
-			"receive", http.HandlerFunc(receive)),
+			"receive", http.HandlerFunc(receive(logger))),
 		)
 
 		srv := &http.Server{
@@ -110,43 +114,63 @@ func main() {
 		})
 	}
 
+	// Listen for termination signals.
+	{
+		cancel := make(chan struct{})
+		g.Add(func() error {
+			return interrupt(logger, cancel)
+		}, func(error) {
+			close(cancel)
+		})
+	}
+
 	if err := g.Run(); err != nil {
 		level.Error(logger).Log("msg", "run group failed", "err", err)
 		os.Exit(1)
 	}
 }
 
-func receive(w http.ResponseWriter, r *http.Request) {
-	compressed, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	reqBuf, err := snappy.Decode(nil, compressed)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	var req prompb.WriteRequest
-	if err := proto.Unmarshal(reqBuf, &req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	for _, ts := range req.Timeseries {
-		m := make(model.Metric, len(ts.Labels))
-		for _, l := range ts.Labels {
-			m[model.LabelName(l.Name)] = model.LabelValue(l.Value)
+func receive(logger log.Logger) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		compressed, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
-		fmt.Println(m)
+		reqBuf, err := snappy.Decode(nil, compressed)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
-		for _, s := range ts.Samples {
-			fmt.Printf("  %f %d\n", s.Value, s.Timestamp)
+		var req prompb.WriteRequest
+		if err := proto.Unmarshal(reqBuf, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		for _, ts := range req.Timeseries {
+			m := make(model.Metric, len(ts.Labels))
+			for _, l := range ts.Labels {
+				m[model.LabelName(l.Name)] = model.LabelValue(l.Value)
+			}
+
+			level.Info(logger).Log("msg", m)
+
+			for _, s := range ts.Samples {
+				level.Info(logger).Log("msg", fmt.Sprintf("  %f %d", s.Value, s.Timestamp))
+			}
 		}
 	}
+}
+
+func registerProfiler(mux *http.ServeMux) {
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 }
 
 // Helpers
@@ -175,10 +199,14 @@ func parseFlags() config {
 	return cfg
 }
 
-func registerProfiler(mux *http.ServeMux) {
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+func interrupt(logger log.Logger, cancel <-chan struct{}) error {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case s := <-c:
+		level.Info(logger).Log("msg", "caught signal. Exiting.", "signal", s)
+		return nil
+	case <-cancel:
+		return errors.New("canceled")
+	}
 }
