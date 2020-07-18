@@ -3,20 +3,20 @@ include .bingo/Variables.mk
 OS   ?= $(shell uname -s | tr '[A-Z]' '[a-z]')
 ARCH ?= $(shell uname -m)
 
-VERSION    := $(strip $(shell [ -d .git ] && git describe --always --tags --dirty))
-BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%S%Z")
-VCS_REF    := $(strip $(shell [ -d .git ] && git rev-parse --short HEAD))
-BRANCH     := $(strip $(shell git rev-parse --abbrev-ref HEAD))
-VERSION    := $(strip $(shell [ -d .git ] && git describe --always --tags --dirty))
-USER       ?= $(shell id -u -n)
-HOST       ?= $(shell hostname)
+VERSION         := $(strip $(shell [ -d .git ] && git describe --always --tags --dirty))
+BUILD_DATE      := $(shell date -u +"%Y-%m-%d")
+BUILD_TIMESTAMP := $(shell date -u +"%Y-%m-%dT%H:%M:%S%Z")
+VCS_REF         := $(strip $(shell [ -d .git ] && git rev-parse --short HEAD))
+BRANCH          := $(strip $(shell git rev-parse --abbrev-ref HEAD))
+USER            ?= $(shell id -u -n)
+HOST            ?= $(shell hostname)
 
 LDFLAGS := -s -w \
 	-X github.com/prometheus/common/version.Version="$(VERSION)" \
 	-X github.com/prometheus/common/version.Revision="$(VCS_REF)" \
 	-X github.com/prometheus/common/version.Branch="$(BRANCH)" \
 	-X github.com/prometheus/common/version.BuildUser="${USER}"@"${HOST}" \
-	-X github.com/prometheus/common/version.BuildDate="$(BUILD_DATE)"
+	-X github.com/prometheus/common/version.BuildDate="$(BUILD_TIMESTAMP)"
 
 GO_FILES   := $(shell find . -name \*.go -print)
 M          =  $(shell printf "\033[34;1m▶\033[0m")
@@ -45,16 +45,20 @@ container: container-backend container-proxy
 .PHONY: container-push
 container-push: ## Pushes latest container images to repository
 container-push: container ; $(info $(M) running container-push )
-	@docker push kakkoyun/observable-remote-write-backend:$(VERSION)
-	@docker push kakkoyun/observable-remote-write-proxy:$(VERSION)
+	@docker push kakkoyun/observable-remote-write-backend:$(BRANCH)-$(BUILD_DATE)-$(VERSION)
+	@docker push kakkoyun/observable-remote-write-backend:latest
+	@docker push kakkoyun/observable-remote-write-proxy:$(BRANCH)-$(BUILD_DATE)-$(VERSION)
+	@docker push kakkoyun/observable-remote-write-proxy:latest
 
 .PHONY: container-backend
 container-backend: docker/backend.dockerfile
-	@docker build -t observable-remote-write-backend .
+	@docker build -t kakkoyun/observable-remote-write-backend:latest -f $? .
+	@docker tag kakkoyun/observable-remote-write-backend:latest kakkoyun/observable-remote-write-backend:$(BRANCH)-$(BUILD_DATE)-$(VERSION)
 
 .PHONY: container-proxy
 container-proxy: docker/proxy.dockerfile
-	@docker build -t observable-remote-write-proxy .
+	@docker build -t kakkoyun/observable-remote-write-proxy:latest -f $? .
+	@docker tag kakkoyun/observable-remote-write-proxy:latest kakkoyun/observable-remote-write-proxy:$(BRANCH)-$(BUILD_DATE)-$(VERSION)
 
 .PHONY: deps
 deps: ## Install dependencies

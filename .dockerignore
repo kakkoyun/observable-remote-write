@@ -1,0 +1,6 @@
+*.md
+*.yml
+bin
+tmp
+test
+demo

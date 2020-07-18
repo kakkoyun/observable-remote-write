@@ -1,16 +1,19 @@
 FROM golang:1.14.5-alpine3.12 AS builder
-RUN apk add --update --no-cache ca-certificates tzdata && update-ca-certificates
+RUN apk add --update --no-cache ca-certificates tzdata git make && update-ca-certificates
 
 ADD . /opt
 WORKDIR /opt
 
-RUN git update-index --refresh; make backend
+ADD go.* /opt/
+RUN make deps
+
+RUN make bin/backend
 
 FROM scratch as runner
 
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /opt/backend /bin/backend
+COPY --from=builder /opt/bin/backend /bin/backend
 
 LABEL vendor="kakkoyun" \
     name="observable-remote-write-backend" \
@@ -28,6 +31,6 @@ LABEL vendor="kakkoyun" \
     org.opencontainers.image.vendor="kakkoyun" \
     org.opencontainers.image.licenses="Apache-2.0" \
     org.opencontainers.image.title="observable-remote-write-backend" \
-    org.opencontainers.image.description="An application to demonstrate observability and instrumentation tools which confroms Prometheus Remote Write protocol." \
+    org.opencontainers.image.description="An application to demonstrate observability and instrumentation tools which confroms Prometheus Remote Write protocol."
 
 ENTRYPOINT ["/bin/backend"]
