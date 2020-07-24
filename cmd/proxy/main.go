@@ -4,16 +4,23 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	stdlog "log"
+	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/http/pprof"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
+	"github.com/observatorium/observable-demo/pkg/conntrack"
+	"github.com/observatorium/observable-demo/pkg/lbtransport"
 	"github.com/oklog/run"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -46,6 +53,8 @@ type debugConfig struct {
 type serverConfig struct {
 	listen         string
 	listenInternal string
+
+	targets []url.URL
 }
 
 func main() {
@@ -81,21 +90,47 @@ func main() {
 		// Main server to listen for public APIs.
 		mux := http.NewServeMux()
 		srv := &http.Server{
-			Addr:    cfg.server.listen,
 			Handler: mux,
 		}
 
+		ctx, pCancel := context.WithCancel(context.Background())
+		static := lbtransport.NewStaticDiscovery(cfg.server.targets, reg)
+		picker := lbtransport.NewRoundRobinPicker(ctx, reg, 5*time.Second)
+		l7LoadBalancer := &httputil.ReverseProxy{
+			Director:       func(request *http.Request) {},
+			ModifyResponse: func(response *http.Response) error { return nil },
+			Transport:      lbtransport.NewLoadBalancingTransport(static, picker, lbtransport.NewMetrics(reg)),
+		}
+
+		mux.Handle("/receive", internalhttp.NewMetricsMiddleware(reg).
+			NewHandler("/receive", l7LoadBalancer))
+
 		g.Add(func() error {
 			level.Info(logger).Log("msg", "starting server")
+
+			listener, err := net.Listen("tcp", cfg.server.listen)
+			if err != nil {
+				return errors.Wrap(err, "new listener failed")
+			}
+
 			p.Ready()
-			return srv.ListenAndServe()
+			return srv.Serve(
+				conntrack.NewInstrumentedListener(listener,
+					conntrack.NewListenerMetrics(
+						prometheus.WrapRegistererWith(prometheus.Labels{"listener": "lb"}, reg),
+					),
+				),
+			)
 		}, func(err error) {
+			defer pCancel()
+
 			p.NotReady(err)
 
 			ctx, cancel := context.WithTimeout(context.Background(), gracePeriod)
 			defer cancel()
 
 			if err := srv.Shutdown(ctx); err != nil {
+				p.NotHealthy(err)
 				level.Error(logger).Log("msg", "server shutdown failed")
 			}
 		})
@@ -165,8 +200,10 @@ func registerProfiler(mux *http.ServeMux) {
 // Helpers
 
 func parseFlags() config {
-	cfg := config{}
-
+	var (
+		cfg        = config{}
+		rawTargets string
+	)
 	flag.StringVar(&cfg.debug.name, "debug.name", "observable-remote-write-backend",
 		"A name to add as a prefix to log lines.")
 	flag.IntVar(&cfg.debug.mutexProfileFraction, "debug.mutex-profile-fraction", 10,
@@ -179,9 +216,21 @@ func parseFlags() config {
 		"The log format to use. Options: 'logfmt', 'json'.")
 	flag.StringVar(&cfg.server.listen, "web.listen", ":8090",
 		"The address on which the public server listens.")
+	flag.StringVar(&rawTargets, "web.targets", "",
+		"Comma-separated URLs for target to load balance to.")
 	flag.StringVar(&cfg.server.listenInternal, "web.internal.listen", ":8091",
 		"The address on which the internal server listens.")
 	flag.Parse()
+
+	var targetURLs []url.URL
+	for _, addr := range strings.Split(rawTargets, ",") {
+		u, err := url.Parse(addr)
+		if err != nil {
+			stdlog.Fatalf("failed to parse target %v; err: %v", addr, err)
+		}
+		targetURLs = append(targetURLs, *u)
+	}
+	cfg.server.targets = targetURLs
 
 	return cfg
 }

@@ -7,6 +7,7 @@ require (
 	github.com/gogo/protobuf v1.3.1
 	github.com/golang/snappy v0.0.1
 	github.com/grpc-ecosystem/grpc-gateway v1.14.6 // indirect
+	github.com/observatorium/observable-demo v0.0.0-20200126103321-15a3f707e7aa
 	github.com/oklog/run v1.1.0
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.7.1
