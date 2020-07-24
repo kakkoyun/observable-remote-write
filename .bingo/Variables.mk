@@ -6,16 +6,22 @@ GO     ?= $(shell which go)
 
 # Bellow generated variables ensure that every time a tool under each variable is invoked, the correct version
 # will be used; reinstalling only if needed.
-# For example for goimports variable:
+# For example for conprof variable:
 #
 # In your main Makefile (for non array binaries):
 #
 #include .bingo/Variables.mk # Assuming -dir was set to .bingo .
 #
-#command: $(GOIMPORTS)
-#	@echo "Running goimports"
-#	@$(GOIMPORTS) <flags/args..>
+#command: $(CONPROF)
+#	@echo "Running conprof"
+#	@$(CONPROF) <flags/args..>
 #
+CONPROF := $(GOBIN)/conprof-v0.0.0-20200714123214-3d56f1393487
+$(CONPROF): .bingo/conprof.mod
+	@# Install binary/ries using Go 1.14+ build command. This is using bwplotka/bingo-controlled, separate go module with pinned dependencies.
+	@echo "(re)installing $(GOBIN)/conprof-v0.0.0-20200714123214-3d56f1393487"
+	@cd .bingo && $(GO) build -modfile=conprof.mod -o=$(GOBIN)/conprof-v0.0.0-20200714123214-3d56f1393487 "github.com/conprof/conprof"
+
 GOIMPORTS := $(GOBIN)/goimports-v0.0.0-20200717024301-6ddee64345a6
 $(GOIMPORTS): .bingo/goimports.mod
 	@# Install binary/ries using Go 1.14+ build command. This is using bwplotka/bingo-controlled, separate go module with pinned dependencies.
@@ -33,6 +39,12 @@ $(GOTEST): .bingo/gotest.mod
 	@# Install binary/ries using Go 1.14+ build command. This is using bwplotka/bingo-controlled, separate go module with pinned dependencies.
 	@echo "(re)installing $(GOBIN)/gotest-v0.0.5"
 	@cd .bingo && $(GO) build -modfile=gotest.mod -o=$(GOBIN)/gotest-v0.0.5 "github.com/rakyll/gotest"
+
+JAEGER := $(GOBIN)/jaeger-v1.18.1
+$(JAEGER): .bingo/jaeger.mod
+	@# Install binary/ries using Go 1.14+ build command. This is using bwplotka/bingo-controlled, separate go module with pinned dependencies.
+	@echo "(re)installing $(GOBIN)/jaeger-v1.18.1"
+	@cd .bingo && $(GO) build -modfile=jaeger.mod -o=$(GOBIN)/jaeger-v1.18.1 "github.com/jaegertracing/jaeger/cmd/all-in-one"
 
 LICHE := $(GOBIN)/liche-v0.0.0-20200229003944-f57a5d1c5be4
 $(LICHE): .bingo/liche.mod
