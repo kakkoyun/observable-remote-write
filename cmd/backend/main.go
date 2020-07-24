@@ -20,6 +20,7 @@ import (
 	"github.com/golang/snappy"
 	"github.com/oklog/run"
 	"github.com/pkg/errors"
+	"github.com/povilasv/prommod"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/model"
@@ -78,8 +79,9 @@ func main() {
 
 	// Register standard Go metric collectors, which are by default registered when using global registry.
 	reg.MustRegister(
-		version.NewCollector(serviceName),
 		prometheus.NewGoCollector(),
+		version.NewCollector(serviceName),
+		prommod.NewCollector(serviceName),
 		prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}),
 	)
 
