@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
@@ -24,7 +23,6 @@ import (
 	"github.com/oklog/run"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/version"
 	"go.opentelemetry.io/otel/api/kv"
 	"go.opentelemetry.io/otel/exporters/trace/jaeger"
@@ -66,7 +64,8 @@ type serverConfig struct {
 	listen         string
 	listenInternal string
 
-	targets []url.URL
+	targets        []url.URL
+	healthcheckURL string
 }
 
 func main() {
@@ -93,7 +92,8 @@ func main() {
 
 	// Create and install Jaeger export pipeline.
 	traceProvider, closer, err := jaeger.NewExportPipeline(
-		jaeger.WithCollectorEndpoint("http://localhost:14268/api/traces"), // TODO: default port?
+		// jaeger.WithAgentEndpoint("http://127.0.0.1:6831"), // TODO: 6832, configurable?
+		jaeger.WithCollectorEndpoint("http://127.0.0.1:14268/api/traces"), // TODO: default port?
 		jaeger.WithProcess(jaeger.Process{
 			ServiceName: serviceName,
 			Tags: []kv.KeyValue{
@@ -117,7 +117,6 @@ func main() {
 
 	// Initialize run group.
 	g := &run.Group{}
-	p := internalhttp.NewProbe(logger)
 	{
 		// Main server to listen for public APIs.
 		mux := http.NewServeMux()
@@ -140,11 +139,13 @@ func main() {
 		metrics := middleware.NewMetricsMiddleware(reg)
 		mux.Handle("/receive",
 			metrics.NewHandler("receive-proxy")(
-				middleware.Logger(logger)(
-					middleware.Tracer(logger, tracer, "receive-proxy")(
-						// othttp.NewHandler(
-						middleware.RequestID(l7LoadBalancer),
-						// "receive-proxy", othttp.WithTracer(tracer),
+				middleware.Tracer(logger, tracer, "receive-proxy")(
+					middleware.RequestID(
+						middleware.Logger(logger)(
+							// othttp.NewHandler(
+							l7LoadBalancer,
+							// "receive-proxy", othttp.WithTracer(tracer),
+						),
 					),
 				),
 			),
@@ -158,7 +159,6 @@ func main() {
 				return errors.Wrap(err, "new listener")
 			}
 
-			p.Ready()
 			return srv.Serve(
 				conntrack.NewInstrumentedListener(listener,
 					conntrack.NewListenerMetrics(prometheus.WrapRegistererWith(prometheus.Labels{"listener": "lb"}, reg)),
@@ -167,13 +167,10 @@ func main() {
 		}, func(err error) {
 			defer pCancel()
 
-			p.NotReady(err)
-
 			ctx, cancel := context.WithTimeout(context.Background(), gracePeriod)
 			defer cancel()
 
 			if err := srv.Shutdown(ctx); err != nil {
-				p.NotHealthy(err)
 				level.Error(logger).Log("msg", "server shutdown")
 			}
 		})
@@ -191,22 +188,7 @@ func main() {
 
 	// Add internal server.
 	{
-		// Internal server to expose introspection APIs.
-		mux := http.NewServeMux()
-
-		// Register metrics server.
-		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-
-		// Register pprof endpoints.
-		registerProfiler(mux)
-
-		// Register health checks.
-		registerProbes(mux, p)
-
-		internalSrv := &http.Server{
-			Addr:    cfg.server.listenInternal,
-			Handler: mux,
-		}
+		internalSrv := internalhttp.NewServer(reg, cfg.server.listenInternal, cfg.server.healthcheckURL)
 		g.Add(func() error {
 			level.Info(logger).Log("msg", "starting internal server")
 			return internalSrv.ListenAndServe()
@@ -226,21 +208,6 @@ func main() {
 	}
 }
 
-func registerProbes(mux *http.ServeMux, p *internalhttp.Probe) {
-	if p != nil {
-		mux.Handle("/-/healthy", p.HealthyHandler())
-		mux.Handle("/-/ready", p.ReadyHandler())
-	}
-}
-
-func registerProfiler(mux *http.ServeMux) {
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-}
-
 // Helpers
 
 func parseFlags() config {
@@ -249,7 +216,7 @@ func parseFlags() config {
 		rawTargets string
 	)
 
-	flag.StringVar(&cfg.debug.name, "debug.name", "observable-remote-write-backend",
+	flag.StringVar(&cfg.debug.name, "debug.name", "observable-remote-write-proxy",
 		"A name to add as a prefix to log lines.")
 	flag.IntVar(&cfg.debug.mutexProfileFraction, "debug.mutex-profile-fraction", 10,
 		"The percentage of mutex contention events that are reported in the mutex profile.")
@@ -265,6 +232,8 @@ func parseFlags() config {
 		"Comma-separated URLs for target to load balance to.")
 	flag.StringVar(&cfg.server.listenInternal, "web.internal.listen", ":8091",
 		"The address on which the internal server listens.")
+	flag.StringVar(&cfg.server.healthcheckURL, "web.healthchecks.url", "http://localhost:8090",
+		"The URL against which to run healthchecks.")
 	flag.Parse()
 
 	for _, addr := range strings.Split(rawTargets, ",") {

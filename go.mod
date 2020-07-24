@@ -7,6 +7,7 @@ require (
 	github.com/go-kit/kit v0.10.0
 	github.com/gogo/protobuf v1.3.1
 	github.com/golang/snappy v0.0.1
+	github.com/metalmatze/signal v0.0.0-20200616171423-be84551ba3ce
 	github.com/observatorium/observable-demo v0.0.0-20200126103321-15a3f707e7aa
 	github.com/oklog/run v1.1.0
 	github.com/oklog/ulid v1.3.1

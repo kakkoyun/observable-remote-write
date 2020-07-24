@@ -23,7 +23,7 @@ func Logger(logger log.Logger) func(next http.Handler) http.Handler {
 				"proto", r.Proto,
 				"method", r.Method,
 				"status", ww.Status(),
-				"content", r.Header.Get("Content-Type"),
+				"content-type", r.Header.Get("Content-Type"),
 				"path", r.URL.Path,
 				"duration", time.Since(start),
 				"bytes", ww.BytesWritten(),

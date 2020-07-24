@@ -40,3 +40,9 @@ $(LICHE): .bingo/liche.mod
 	@echo "(re)installing $(GOBIN)/liche-v0.0.0-20200229003944-f57a5d1c5be4"
 	@cd .bingo && $(GO) build -modfile=liche.mod -o=$(GOBIN)/liche-v0.0.0-20200229003944-f57a5d1c5be4 "github.com/raviqqe/liche"
 
+UP := $(GOBIN)/up-v0.0.0-20200615121732-d763595ede50
+$(UP): .bingo/up.mod
+	@# Install binary/ries using Go 1.14+ build command. This is using bwplotka/bingo-controlled, separate go module with pinned dependencies.
+	@echo "(re)installing $(GOBIN)/up-v0.0.0-20200615121732-d763595ede50"
+	@cd .bingo && $(GO) build -modfile=up.mod -o=$(GOBIN)/up-v0.0.0-20200615121732-d763595ede50 "github.com/observatorium/up/cmd/up"
+

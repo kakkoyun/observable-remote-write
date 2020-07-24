@@ -15,15 +15,12 @@ import (
 	"go.opentelemetry.io/otel/api/trace"
 
 	"github.com/kakkoyun/observable-remote-write/internal"
-	"github.com/kakkoyun/observable-remote-write/internal/http/middleware"
 )
 
 func Receive(logger log.Logger, tracer trace.Tracer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, span := tracer.Start(r.Context(), "receive")
 		defer span.End()
-
-		logger = log.With(logger, "request-id", middleware.RequestIDFromContext(ctx))
 
 		var compressed []byte
 

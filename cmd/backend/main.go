@@ -6,7 +6,6 @@ import (
 	"fmt"
 	stdlog "log"
 	"net/http"
-	"net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
@@ -19,7 +18,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/povilasv/prommod"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/version"
 	"go.opentelemetry.io/otel/api/kv"
 	"go.opentelemetry.io/otel/exporters/trace/jaeger"
@@ -56,6 +54,7 @@ type debugConfig struct {
 type serverConfig struct {
 	listen         string
 	listenInternal string
+	healthcheckURL string
 }
 
 func main() {
@@ -83,7 +82,8 @@ func main() {
 
 	// Create and install Jaeger export pipeline.
 	traceProvider, closer, err := jaeger.NewExportPipeline(
-		jaeger.WithCollectorEndpoint("http://localhost:14268/api/traces"), // TODO: default port?
+		// jaeger.WithAgentEndpoint("http://127.0.0.1:6831"), // TODO: 6832, configurable?
+		jaeger.WithCollectorEndpoint("http://127.0.0.1:14268/api/traces"), // TODO: default port?
 		jaeger.WithProcess(jaeger.Process{
 			ServiceName: serviceName,
 			Tags: []kv.KeyValue{
@@ -107,17 +107,16 @@ func main() {
 
 	// Initialize run group.
 	g := &run.Group{}
-	p := internalhttp.NewProbe(logger)
 	{
 		metrics := middleware.NewMetricsMiddleware(reg)
 		// Main server to listen for public APIs.
 		mux := http.NewServeMux()
 		mux.Handle("/receive",
-			metrics.NewHandler("/receive")(
-				middleware.Logger(logger)(
-					middleware.Tracer(logger, tracer, "receive-proxy")(
-						// othttp.NewHandler(
-						middleware.RequestID(
+			metrics.NewHandler("receive")(
+				middleware.Tracer(logger, tracer, "receive-proxy")(
+					middleware.RequestID(
+						middleware.Logger(logger)(
+							// othttp.NewHandler(
 							receiver.Receive(logger, tracer),
 						),
 						// "receive-proxy", othttp.WithTracer(tracer),
@@ -155,22 +154,7 @@ func main() {
 
 	// Add internal server.
 	{
-		// Internal server to expose introspection APIs.
-		mux := http.NewServeMux()
-
-		// Register metrics server.
-		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-
-		// Register pprof endpoints.
-		registerProfiler(mux)
-
-		// Register health checks.
-		registerProbes(mux, p)
-
-		internalSrv := &http.Server{
-			Addr:    cfg.server.listenInternal,
-			Handler: mux,
-		}
+		internalSrv := internalhttp.NewServer(reg, cfg.server.listenInternal, cfg.server.healthcheckURL)
 		g.Add(func() error {
 			level.Info(logger).Log("msg", "starting internal server")
 			return internalSrv.ListenAndServe()
@@ -188,21 +172,6 @@ func main() {
 		level.Error(logger).Log("msg", "run group", "err", err)
 		os.Exit(1)
 	}
-}
-
-func registerProbes(mux *http.ServeMux, p *internalhttp.Probe) {
-	if p != nil {
-		mux.Handle("/-/healthy", p.HealthyHandler())
-		mux.Handle("/-/ready", p.ReadyHandler())
-	}
-}
-
-func registerProfiler(mux *http.ServeMux) {
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 }
 
 // Helpers
@@ -224,6 +193,8 @@ func parseFlags() config {
 		"The address on which the public server listens.")
 	flag.StringVar(&cfg.server.listenInternal, "web.internal.listen", ":8081",
 		"The address on which the internal server listens.")
+	flag.StringVar(&cfg.server.healthcheckURL, "web.healthchecks.url", "http://localhost:8080",
+		"The URL against which to run healthchecks.")
 	flag.Parse()
 
 	return cfg

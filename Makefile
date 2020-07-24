@@ -20,7 +20,7 @@ LDFLAGS := -s -w \
 
 GO_FILES   := $(shell find . -name \*.go -print)
 M          =  $(shell printf "\033[34;1m▶\033[0m")
-BIN_DIR    ?= ./tmp/bin
+BIN_DIR    ?= ./bin
 SHELLCHECK ?= $(BIN_DIR)/shellcheck
 
 .PHONY: all
@@ -28,14 +28,14 @@ all: format build
 
 .PHONY: build
 build: ## Build binaries
-build: deps bin/backend bin/proxy
+build: deps ${BIN_DIR}/backend ${BIN_DIR}/proxy
 
 backend: ## Build backend binary
-bin/backend: cmd/backend/main.go
+${BIN_DIR}/backend: cmd/backend/main.go
 	@go build -a -tags netgo -ldflags '${LDFLAGS}' -o $@ $?
 
 proxy: ## Build proxy binary
-bin/proxy: cmd/proxy/main.go
+${BIN_DIR}/proxy: cmd/proxy/main.go
 	@go build -a -tags netgo -ldflags '${LDFLAGS}' -o $@ $?
 
 .PHONY: container
@@ -69,7 +69,7 @@ deps: go.mod go.sum
 .PHONY: setup
 setup: ## Setups dev environment
 setup: deps ; $(info $(M) running setup for development )
-	make $(GOTEST) $(LICHE) $(GOLANGCI_LINT) $(BINGO)
+	make $(GOTEST) $(LICHE) $(GOLANGCI_LINT) $(UP) $(BINGO)
 
 .PHONY: format
 format: ## Runs gofmt and goimports
@@ -88,10 +88,19 @@ fix: ## Runs golangci-lint fix
 fix: $(GOLANGCI_LINT) format ; $(info $(M) running fix )
 	$(GOLANGCI_LINT) run --fix --enable-all --skip-dirs tmp -c .golangci.yml
 
+.PHONY: test-integration
+test-integration: ## Runs integration tests
+test-integration: setup build ; $(info $(M) running integration tests)
+	PATH=$$PATH:$$(pwd)/$(BIN_DIR) ./test/integration.sh
+
+.PHONY: test-unit
+test-unit: ## Runs unit tests
+test-unit: $(GOTEST) ; $(info $(M) running unit tests)
+	-$(GOTEST) -race -short -cover -failfast ./...
+
 .PHONY: test
 test: ## Runs tests
-test: $(GOTEST) ; $(info $(M) running test)
-	-$(GOTEST) -race -short -cover -failfast ./...
+test: $(GOTEST) test-unit test-integration ; $(info $(M) running tests)
 
 .PHONY: shellcheck
 shellcheck: ## Check shell scripts
