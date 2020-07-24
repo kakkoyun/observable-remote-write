@@ -26,6 +26,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/version"
+	"go.opentelemetry.io/otel/api/kv"
+	"go.opentelemetry.io/otel/exporters/trace/jaeger"
+	"go.opentelemetry.io/otel/instrumentation/othttp"
+	"go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/kakkoyun/observable-remote-write/internal"
 	internalhttp "github.com/kakkoyun/observable-remote-write/internal/http"
@@ -40,7 +44,10 @@ const (
 	backoffDuration = 5 * time.Second
 )
 
-var errCancelled = errors.New("canceled")
+var (
+	serviceName  = "observable_remote_write_proxy"
+	errCancelled = errors.New("canceled")
+)
 
 type config struct {
 	logLevel  string
@@ -75,19 +82,38 @@ func main() {
 		runtime.SetBlockProfileRate(cfg.debug.blockProfileRate)
 	}
 
-	// Initialize structured logger.
-	logger := internal.NewLogger(cfg.logLevel, cfg.logFormat, cfg.debug.name)
-	defer level.Info(logger).Log("msg", "exiting")
-
 	// Start our metric registry.
 	reg := prometheus.NewRegistry()
 
 	// Register standard Go metric collectors, which are by default registered when using global registry.
 	reg.MustRegister(
-		version.NewCollector("observable_remote_write_proxy"),
+		version.NewCollector(serviceName),
 		prometheus.NewGoCollector(),
 		prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}),
 	)
+
+	// Create and install Jaeger export pipeline.
+	traceProvider, closer, err := jaeger.NewExportPipeline(
+		jaeger.WithCollectorEndpoint("http://localhost:14268/api/traces"), // TODO: default port?
+		jaeger.WithProcess(jaeger.Process{
+			ServiceName: serviceName,
+			Tags: []kv.KeyValue{
+				kv.String("exporter", "jaeger"),
+			},
+		}),
+		jaeger.WithSDK(&trace.Config{DefaultSampler: trace.AlwaysSample()}),
+	)
+	if err != nil {
+		stdlog.Fatalf("failed to initialize tracer, err: %v", err)
+	}
+	defer closer()
+
+	// Initialize OpenTelemetry tracer.
+	tracer := traceProvider.Tracer(serviceName)
+
+	// Initialize structured logger.
+	logger := internal.NewLogger(cfg.logLevel, cfg.logFormat, cfg.debug.name)
+	defer level.Info(logger).Log("msg", "exiting")
 
 	// Initialize run group.
 	g := &run.Group{}
@@ -105,14 +131,21 @@ func main() {
 		l7LoadBalancer := &httputil.ReverseProxy{
 			Director:       func(request *http.Request) {},
 			ModifyResponse: func(response *http.Response) error { return nil },
-			Transport:      lbtransport.NewLoadBalancingTransport(static, picker, lbtransport.NewMetrics(reg)),
+			Transport: othttp.NewTransport(
+				lbtransport.NewLoadBalancingTransport(static, picker, lbtransport.NewMetrics(reg)),
+				othttp.WithTracer(tracer),
+			),
 		}
 
 		metrics := middleware.NewMetricsMiddleware(reg)
 		mux.Handle("/receive",
-			metrics.NewHandler("/receive")(
-				middleware.RequestID(
-					middleware.Logger(logger)(l7LoadBalancer),
+			metrics.NewHandler("receive-proxy")(
+				middleware.Logger(logger)(
+					middleware.Tracer(logger, tracer, "receive-proxy")(
+						// othttp.NewHandler(
+						middleware.RequestID(l7LoadBalancer),
+						// "receive-proxy", othttp.WithTracer(tracer),
+					),
 				),
 			),
 		)
@@ -128,8 +161,7 @@ func main() {
 			p.Ready()
 			return srv.Serve(
 				conntrack.NewInstrumentedListener(listener,
-					conntrack.NewListenerMetrics(
-						prometheus.WrapRegistererWith(prometheus.Labels{"listener": "lb"}, reg),
+					conntrack.NewListenerMetrics(prometheus.WrapRegistererWith(prometheus.Labels{"listener": "lb"}, reg),
 					),
 				),
 			)

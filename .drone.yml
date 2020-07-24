@@ -11,6 +11,7 @@ steps:
     pull: always
     image: golang:1.14
     commands:
+      - apt-get update && apt-get install xz-utils
       - make lint
       - git diff --exit-code
 

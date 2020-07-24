@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	stdlog "log"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -24,6 +25,9 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/version"
 	"github.com/prometheus/prometheus/prompb"
+	"go.opentelemetry.io/otel/api/kv"
+	"go.opentelemetry.io/otel/exporters/trace/jaeger"
+	"go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/kakkoyun/observable-remote-write/internal"
 	internalhttp "github.com/kakkoyun/observable-remote-write/internal/http"
@@ -33,7 +37,10 @@ import (
 // gracePeriod specify graceful shutdown period.
 const gracePeriod = 10 * time.Second
 
-var errCancelled = errors.New("canceled")
+var (
+	serviceName  = "observable_remote_write_backend"
+	errCancelled = errors.New("canceled")
+)
 
 type config struct {
 	logLevel  string
@@ -66,19 +73,38 @@ func main() {
 		runtime.SetBlockProfileRate(cfg.debug.blockProfileRate)
 	}
 
-	// Initialize structured logger.
-	logger := internal.NewLogger(cfg.logLevel, cfg.logFormat, cfg.debug.name)
-	defer level.Info(logger).Log("msg", "exiting")
-
 	// Start metric registry.
 	reg := prometheus.NewRegistry()
 
 	// Register standard Go metric collectors, which are by default registered when using global registry.
 	reg.MustRegister(
-		version.NewCollector("observable_remote_write_backend"),
+		version.NewCollector(serviceName),
 		prometheus.NewGoCollector(),
 		prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}),
 	)
+
+	// Create and install Jaeger export pipeline.
+	traceProvider, closer, err := jaeger.NewExportPipeline(
+		jaeger.WithCollectorEndpoint("http://localhost:14268/api/traces"), // TODO: default port?
+		jaeger.WithProcess(jaeger.Process{
+			ServiceName: serviceName,
+			Tags: []kv.KeyValue{
+				kv.String("exporter", "jaeger"),
+			},
+		}),
+		jaeger.WithSDK(&trace.Config{DefaultSampler: trace.AlwaysSample()}),
+	)
+	if err != nil {
+		stdlog.Fatalf("failed to initialize tracer, err: %v", err)
+	}
+	defer closer()
+
+	// Initialize OpenTelemetry tracer.
+	tracer := traceProvider.Tracer(serviceName)
+
+	// Initialize structured logger.
+	logger := internal.NewLogger(cfg.logLevel, cfg.logFormat, cfg.debug.name)
+	defer level.Info(logger).Log("msg", "exiting")
 
 	// Initialize run group.
 	g := &run.Group{}
@@ -90,8 +116,12 @@ func main() {
 		mux.Handle("/receive",
 			metrics.NewHandler("/receive")(
 				middleware.Logger(logger)(
-					middleware.RequestID(
-						receive(logger),
+					middleware.Tracer(logger, tracer, "receive-proxy")(
+						// othttp.NewHandler(
+						middleware.RequestID(
+							receive(logger),
+						),
+						// "receive-proxy", othttp.WithTracer(tracer),
 					),
 				),
 			),
@@ -163,10 +193,10 @@ func main() {
 
 func receive(logger log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		logger = log.With(logger, "request-id", middleware.RequestIDFromContext(r.Context())) // TODO: Check!
+		logger = log.With(logger, "request-id", middleware.RequestIDFromContext(r.Context()))
 
 		compressed, err := ioutil.ReadAll(r.Body)
-		defer internal.ExhaustCloseWithLogOnErr(logger, r.Body) // TODO: Check!
+		defer internal.ExhaustCloseWithLogOnErr(logger, r.Body)
 
 		if err != nil {
 			level.Warn(logger).Log("msg", "http read", "err", err)
