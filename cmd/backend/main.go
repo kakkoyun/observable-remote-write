@@ -7,15 +7,11 @@ import (
 	stdlog "log"
 	"net/http"
 	"os"
-	"os/signal"
 	"runtime"
-	"syscall"
 	"time"
 
-	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/oklog/run"
-	"github.com/pkg/errors"
 	"github.com/povilasv/prommod"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/version"
@@ -34,8 +30,6 @@ const (
 	gracePeriod = 10 * time.Second
 	serviceName = "observable_remote_write_backend"
 )
-
-var errCancelled = errors.New("canceled")
 
 type config struct {
 	logLevel  string
@@ -146,7 +140,7 @@ func main() {
 	{
 		cancel := make(chan struct{})
 		g.Add(func() error {
-			return interrupt(logger, cancel)
+			return internal.Interrupt(logger, cancel)
 		}, func(error) {
 			close(cancel)
 		})
@@ -198,16 +192,4 @@ func parseFlags() config {
 	flag.Parse()
 
 	return cfg
-}
-
-func interrupt(logger log.Logger, cancel <-chan struct{}) error {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case s := <-c:
-		level.Info(logger).Log("msg", "caught signal. Exiting.", "signal", s)
-		return nil
-	case <-cancel:
-		return errCancelled
-	}
 }

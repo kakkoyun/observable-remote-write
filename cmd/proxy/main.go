@@ -10,13 +10,10 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"os/signal"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/observatorium/observable-demo/pkg/conntrack"
 	"github.com/observatorium/observable-demo/pkg/lbtransport"
@@ -43,8 +40,6 @@ const (
 
 	serviceName = "observable_remote_write_proxy"
 )
-
-var errCancelled = errors.New("canceled")
 
 type config struct {
 	logLevel  string
@@ -180,7 +175,7 @@ func main() {
 	{
 		cancel := make(chan struct{})
 		g.Add(func() error {
-			return interrupt(logger, cancel)
+			return internal.Interrupt(logger, cancel)
 		}, func(error) {
 			close(cancel)
 		})
@@ -237,6 +232,9 @@ func parseFlags() config {
 	flag.Parse()
 
 	for _, addr := range strings.Split(rawTargets, ",") {
+		if addr == "" {
+			continue
+		}
 		u, err := url.Parse(addr)
 		if err != nil {
 			stdlog.Fatalf("failed to parse target %v; err: %v", addr, err)
@@ -246,16 +244,4 @@ func parseFlags() config {
 	}
 
 	return cfg
-}
-
-func interrupt(logger log.Logger, cancel <-chan struct{}) error {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case s := <-c:
-		level.Info(logger).Log("msg", "caught signal, shutting down", "signal", s)
-		return nil
-	case <-cancel:
-		return errCancelled
-	}
 }
