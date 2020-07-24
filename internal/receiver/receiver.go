@@ -61,16 +61,18 @@ func Receive(logger log.Logger, tracer trace.Tracer) http.HandlerFunc {
 			return
 		}
 
+		level.Info(logger).Log("msg", "remote write request received")
+
 		for _, ts := range req.Timeseries {
 			m := make(model.Metric, len(ts.Labels))
 			for _, l := range ts.Labels {
 				m[model.LabelName(l.Name)] = model.LabelValue(l.Value)
 			}
 
-			level.Info(logger).Log("msg", m)
+			level.Debug(logger).Log("msg", m)
 
 			for _, s := range ts.Samples {
-				level.Info(logger).Log("msg", fmt.Sprintf("  %f %d", s.Value, s.Timestamp))
+				level.Debug(logger).Log("msg", fmt.Sprintf("  %f %d", s.Value, s.Timestamp))
 			}
 		}
 	}
