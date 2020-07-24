@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	stdlog "log"
 	"net/http"
 	"net/http/pprof"
@@ -16,33 +15,29 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	"github.com/gogo/protobuf/proto"
-	"github.com/golang/snappy"
 	"github.com/oklog/run"
 	"github.com/pkg/errors"
 	"github.com/povilasv/prommod"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/version"
-	"github.com/prometheus/prometheus/prompb"
 	"go.opentelemetry.io/otel/api/kv"
-	"go.opentelemetry.io/otel/api/trace"
 	"go.opentelemetry.io/otel/exporters/trace/jaeger"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/kakkoyun/observable-remote-write/internal"
 	internalhttp "github.com/kakkoyun/observable-remote-write/internal/http"
 	"github.com/kakkoyun/observable-remote-write/internal/http/middleware"
+	"github.com/kakkoyun/observable-remote-write/internal/receiver"
 )
 
 // gracePeriod specify graceful shutdown period.
-const gracePeriod = 10 * time.Second
-
-var (
-	serviceName  = "observable_remote_write_backend"
-	errCancelled = errors.New("canceled")
+const (
+	gracePeriod = 10 * time.Second
+	serviceName = "observable_remote_write_backend"
 )
+
+var errCancelled = errors.New("canceled")
 
 type config struct {
 	logLevel  string
@@ -100,6 +95,7 @@ func main() {
 	if err != nil {
 		stdlog.Fatalf("failed to initialize tracer, err: %v", err)
 	}
+
 	defer closer()
 
 	// Initialize OpenTelemetry tracer.
@@ -122,7 +118,7 @@ func main() {
 					middleware.Tracer(logger, tracer, "receive-proxy")(
 						// othttp.NewHandler(
 						middleware.RequestID(
-							receive(logger, tracer),
+							receiver.Receive(logger, tracer),
 						),
 						// "receive-proxy", othttp.WithTracer(tracer),
 					),
@@ -191,64 +187,6 @@ func main() {
 	if err := g.Run(); err != nil {
 		level.Error(logger).Log("msg", "run group", "err", err)
 		os.Exit(1)
-	}
-}
-
-func receive(logger log.Logger, tracer trace.Tracer) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx, span := tracer.Start(r.Context(), "receive")
-		defer span.End()
-
-		logger = log.With(logger, "request-id", middleware.RequestIDFromContext(ctx))
-
-		var compressed []byte
-		if err := tracer.WithSpan(ctx, "read", func(ctx context.Context) error {
-			var err error
-			compressed, err = ioutil.ReadAll(r.Body)
-			return err
-		}); err != nil {
-			level.Warn(logger).Log("msg", "http read", "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-
-			return
-		}
-		defer internal.ExhaustCloseWithLogOnErr(logger, r.Body)
-
-		var reqBuf []byte
-		if err := tracer.WithSpan(ctx, "decode", func(ctx context.Context) error {
-			var err error
-			reqBuf, err = snappy.Decode(nil, compressed)
-			return err
-		}); err != nil {
-			level.Warn(logger).Log("msg", "snappy decode", "err", err)
-			http.Error(w, err.Error(), http.StatusBadRequest)
-
-			return
-		}
-
-		var req prompb.WriteRequest
-
-		if err := tracer.WithSpan(ctx, "decode", func(ctx context.Context) error {
-			return proto.Unmarshal(reqBuf, &req)
-		}); err != nil {
-			level.Warn(logger).Log("msg", "proto unmarshalling", "err", err)
-			http.Error(w, err.Error(), http.StatusBadRequest)
-
-			return
-		}
-
-		for _, ts := range req.Timeseries {
-			m := make(model.Metric, len(ts.Labels))
-			for _, l := range ts.Labels {
-				m[model.LabelName(l.Name)] = model.LabelValue(l.Value)
-			}
-
-			level.Info(logger).Log("msg", m)
-
-			for _, s := range ts.Samples {
-				level.Info(logger).Log("msg", fmt.Sprintf("  %f %d", s.Value, s.Timestamp))
-			}
-		}
 	}
 }
 

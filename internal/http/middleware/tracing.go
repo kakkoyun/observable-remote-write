@@ -15,6 +15,7 @@ import (
 // If any client span is fetched from the wire, we include that as our parent.
 func Tracer(logger log.Logger, tracer trace.Tracer, name string) func(next http.Handler) http.Handler {
 	operation := fmt.Sprintf("/%s HTTP[server]", name)
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()

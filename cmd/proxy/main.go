@@ -42,12 +42,11 @@ const (
 
 	// backoffDuration specify back-off duration of loadbalancer when backing connection fails.
 	backoffDuration = 5 * time.Second
+
+	serviceName = "observable_remote_write_proxy"
 )
 
-var (
-	serviceName  = "observable_remote_write_proxy"
-	errCancelled = errors.New("canceled")
-)
+var errCancelled = errors.New("canceled")
 
 type config struct {
 	logLevel  string
@@ -106,6 +105,7 @@ func main() {
 	if err != nil {
 		stdlog.Fatalf("failed to initialize tracer, err: %v", err)
 	}
+
 	defer closer()
 
 	// Initialize OpenTelemetry tracer.
@@ -161,8 +161,7 @@ func main() {
 			p.Ready()
 			return srv.Serve(
 				conntrack.NewInstrumentedListener(listener,
-					conntrack.NewListenerMetrics(prometheus.WrapRegistererWith(prometheus.Labels{"listener": "lb"}, reg),
-					),
+					conntrack.NewListenerMetrics(prometheus.WrapRegistererWith(prometheus.Labels{"listener": "lb"}, reg)),
 				),
 			)
 		}, func(err error) {
