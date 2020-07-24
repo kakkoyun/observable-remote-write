@@ -227,7 +227,7 @@ func parseFlags() config {
 		"Comma-separated URLs for target to load balance to.")
 	flag.StringVar(&cfg.server.listenInternal, "web.internal.listen", ":8091",
 		"The address on which the internal server listens.")
-	flag.StringVar(&cfg.server.healthcheckURL, "web.healthchecks.url", "http://localhost:8090",
+	flag.StringVar(&cfg.server.healthcheckURL, "web.healthchecks.url", "http://127.0.0.1:8090",
 		"The URL against which to run healthchecks.")
 	flag.Parse()
 

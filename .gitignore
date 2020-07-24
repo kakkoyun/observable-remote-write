@@ -16,3 +16,6 @@ vendor/
 
 bin
 tmp
+data
+*.tar.gz
+*.zip

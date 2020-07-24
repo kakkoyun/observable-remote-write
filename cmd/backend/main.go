@@ -187,7 +187,7 @@ func parseFlags() config {
 		"The address on which the public server listens.")
 	flag.StringVar(&cfg.server.listenInternal, "web.internal.listen", ":8081",
 		"The address on which the internal server listens.")
-	flag.StringVar(&cfg.server.healthcheckURL, "web.healthchecks.url", "http://localhost:8080",
+	flag.StringVar(&cfg.server.healthcheckURL, "web.healthchecks.url", "http://127.0.0.1:8080",
 		"The URL against which to run healthchecks.")
 	flag.Parse()
 
