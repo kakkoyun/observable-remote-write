@@ -27,8 +27,9 @@ import (
 	"github.com/prometheus/common/version"
 	"github.com/prometheus/prometheus/prompb"
 	"go.opentelemetry.io/otel/api/kv"
+	"go.opentelemetry.io/otel/api/trace"
 	"go.opentelemetry.io/otel/exporters/trace/jaeger"
-	"go.opentelemetry.io/otel/sdk/trace"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/kakkoyun/observable-remote-write/internal"
 	internalhttp "github.com/kakkoyun/observable-remote-write/internal/http"
@@ -94,7 +95,7 @@ func main() {
 				kv.String("exporter", "jaeger"),
 			},
 		}),
-		jaeger.WithSDK(&trace.Config{DefaultSampler: trace.AlwaysSample()}),
+		jaeger.WithSDK(&sdktrace.Config{DefaultSampler: sdktrace.AlwaysSample()}),
 	)
 	if err != nil {
 		stdlog.Fatalf("failed to initialize tracer, err: %v", err)
@@ -121,7 +122,7 @@ func main() {
 					middleware.Tracer(logger, tracer, "receive-proxy")(
 						// othttp.NewHandler(
 						middleware.RequestID(
-							receive(logger),
+							receive(logger, tracer),
 						),
 						// "receive-proxy", othttp.WithTracer(tracer),
 					),
@@ -193,22 +194,32 @@ func main() {
 	}
 }
 
-func receive(logger log.Logger) http.HandlerFunc {
+func receive(logger log.Logger, tracer trace.Tracer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		logger = log.With(logger, "request-id", middleware.RequestIDFromContext(r.Context()))
+		ctx, span := tracer.Start(r.Context(), "receive")
+		defer span.End()
 
-		compressed, err := ioutil.ReadAll(r.Body)
-		defer internal.ExhaustCloseWithLogOnErr(logger, r.Body)
+		logger = log.With(logger, "request-id", middleware.RequestIDFromContext(ctx))
 
-		if err != nil {
+		var compressed []byte
+		if err := tracer.WithSpan(ctx, "read", func(ctx context.Context) error {
+			var err error
+			compressed, err = ioutil.ReadAll(r.Body)
+			return err
+		}); err != nil {
 			level.Warn(logger).Log("msg", "http read", "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 
 			return
 		}
+		defer internal.ExhaustCloseWithLogOnErr(logger, r.Body)
 
-		reqBuf, err := snappy.Decode(nil, compressed)
-		if err != nil {
+		var reqBuf []byte
+		if err := tracer.WithSpan(ctx, "decode", func(ctx context.Context) error {
+			var err error
+			reqBuf, err = snappy.Decode(nil, compressed)
+			return err
+		}); err != nil {
 			level.Warn(logger).Log("msg", "snappy decode", "err", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 
@@ -216,7 +227,10 @@ func receive(logger log.Logger) http.HandlerFunc {
 		}
 
 		var req prompb.WriteRequest
-		if err := proto.Unmarshal(reqBuf, &req); err != nil {
+
+		if err := tracer.WithSpan(ctx, "decode", func(ctx context.Context) error {
+			return proto.Unmarshal(reqBuf, &req)
+		}); err != nil {
 			level.Warn(logger).Log("msg", "proto unmarshalling", "err", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 
