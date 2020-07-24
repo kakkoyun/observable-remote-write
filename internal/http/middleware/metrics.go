@@ -1,4 +1,4 @@
-package http
+package middleware
 
 import (
 	"net/http"
@@ -8,27 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// MetricsMiddleware holds necessary metrics to instrument an http.Server
-// and provides necessary behaviors.
-type MetricsMiddleware interface {
-	// NewHandler wraps the given HTTP handler for instrumentation.
-	NewHandler(handlerName string, handler http.Handler) http.HandlerFunc
-}
-
-type nopMetricsMiddleware struct{}
-
-func (ins nopMetricsMiddleware) NewHandler(handlerName string, handler http.Handler) http.HandlerFunc {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handler.ServeHTTP(w, r)
-	})
-}
-
-// NewNopMetricsMiddleware provides a MetricsMiddleware which does nothing.
-func NewNopMetricsMiddleware() MetricsMiddleware {
-	return nopMetricsMiddleware{}
-}
-
-type defaultMetricsMiddleware struct {
+type MetricsMiddleware struct {
 	requestDuration *prometheus.HistogramVec
 	requestSize     *prometheus.SummaryVec
 	requestsTotal   *prometheus.CounterVec
@@ -36,8 +16,8 @@ type defaultMetricsMiddleware struct {
 }
 
 // NewMetricsMiddleware provides default MetricsMiddleware.
-func NewMetricsMiddleware(reg prometheus.Registerer) MetricsMiddleware {
-	ins := defaultMetricsMiddleware{
+func NewMetricsMiddleware(reg prometheus.Registerer) *MetricsMiddleware {
+	ins := MetricsMiddleware{
 		requestDuration: promauto.With(reg).NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "http_request_duration_seconds",
@@ -82,18 +62,20 @@ func NewMetricsMiddleware(reg prometheus.Registerer) MetricsMiddleware {
 // has a constant label named "handler" with the provided handlerName as
 // value. http_requests_total is a metric vector partitioned by HTTP method
 // (label name "method") and HTTP status code (label name "code").
-func (ins *defaultMetricsMiddleware) NewHandler(handlerName string, handler http.Handler) http.HandlerFunc {
-	return promhttp.InstrumentHandlerDuration(
-		ins.requestDuration.MustCurryWith(prometheus.Labels{"handler": handlerName}),
-		promhttp.InstrumentHandlerRequestSize(
-			ins.requestSize.MustCurryWith(prometheus.Labels{"handler": handlerName}),
-			promhttp.InstrumentHandlerCounter(
-				ins.requestsTotal.MustCurryWith(prometheus.Labels{"handler": handlerName}),
-				promhttp.InstrumentHandlerResponseSize(
-					ins.responseSize.MustCurryWith(prometheus.Labels{"handler": handlerName}),
-					handler,
+func (ins *MetricsMiddleware) NewHandler(handlerName string) func(next http.Handler) http.Handler {
+	return func(handler http.Handler) http.Handler {
+		return promhttp.InstrumentHandlerDuration(
+			ins.requestDuration.MustCurryWith(prometheus.Labels{"handler": handlerName}),
+			promhttp.InstrumentHandlerRequestSize(
+				ins.requestSize.MustCurryWith(prometheus.Labels{"handler": handlerName}),
+				promhttp.InstrumentHandlerCounter(
+					ins.requestsTotal.MustCurryWith(prometheus.Labels{"handler": handlerName}),
+					promhttp.InstrumentHandlerResponseSize(
+						ins.responseSize.MustCurryWith(prometheus.Labels{"handler": handlerName}),
+						handler,
+					),
 				),
 			),
-		),
-	)
+		)
+	}
 }

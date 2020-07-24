@@ -40,6 +40,7 @@ func (p *Probe) handler(c check) http.HandlerFunc {
 			http.Error(w, "NOT OK", http.StatusServiceUnavailable)
 			return
 		}
+
 		if _, err := io.WriteString(w, "OK"); err != nil {
 			level.Error(p.logger).Log("msg", "failed to write probe response", "err", err)
 		}
@@ -66,13 +67,11 @@ func (p *Probe) Ready() {
 // NotReady sets components status to not ready with given error as a cause.
 func (p *Probe) NotReady(err error) {
 	atomic.SwapUint32(&p.ready, 0)
-
 }
 
 // Healthy sets components status to healthy.
 func (p *Probe) Healthy() {
 	atomic.SwapUint32(&p.healthy, 1)
-
 }
 
 // NotHealthy sets components status to not healthy with given error as a cause.

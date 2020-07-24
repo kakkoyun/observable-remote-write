@@ -29,10 +29,16 @@ import (
 
 	"github.com/kakkoyun/observable-remote-write/internal"
 	internalhttp "github.com/kakkoyun/observable-remote-write/internal/http"
+	"github.com/kakkoyun/observable-remote-write/internal/http/middleware"
 )
 
-// gracePeriod specify graceful shutdown period.
-const gracePeriod = 10 * time.Second
+const (
+	// gracePeriod specify graceful shutdown period.
+	gracePeriod = 10 * time.Second
+
+	// backoffDuration specify back-off duration of loadbalancer when backing connection fails.
+	backoffDuration = 5 * time.Second
+)
 
 var errCancelled = errors.New("canceled")
 
@@ -95,22 +101,28 @@ func main() {
 
 		ctx, pCancel := context.WithCancel(context.Background())
 		static := lbtransport.NewStaticDiscovery(cfg.server.targets, reg)
-		picker := lbtransport.NewRoundRobinPicker(ctx, reg, 5*time.Second)
+		picker := lbtransport.NewRoundRobinPicker(ctx, reg, backoffDuration)
 		l7LoadBalancer := &httputil.ReverseProxy{
 			Director:       func(request *http.Request) {},
 			ModifyResponse: func(response *http.Response) error { return nil },
 			Transport:      lbtransport.NewLoadBalancingTransport(static, picker, lbtransport.NewMetrics(reg)),
 		}
 
-		mux.Handle("/receive", internalhttp.NewMetricsMiddleware(reg).
-			NewHandler("/receive", l7LoadBalancer))
+		metrics := middleware.NewMetricsMiddleware(reg)
+		mux.Handle("/receive",
+			metrics.NewHandler("/receive")(
+				middleware.RequestID(
+					middleware.Logger(logger)(l7LoadBalancer),
+				),
+			),
+		)
 
 		g.Add(func() error {
 			level.Info(logger).Log("msg", "starting server")
 
 			listener, err := net.Listen("tcp", cfg.server.listen)
 			if err != nil {
-				return errors.Wrap(err, "new listener failed")
+				return errors.Wrap(err, "new listener")
 			}
 
 			p.Ready()
@@ -131,7 +143,7 @@ func main() {
 
 			if err := srv.Shutdown(ctx); err != nil {
 				p.NotHealthy(err)
-				level.Error(logger).Log("msg", "server shutdown failed")
+				level.Error(logger).Log("msg", "server shutdown")
 			}
 		})
 	}
@@ -165,19 +177,20 @@ func main() {
 			Handler: mux,
 		}
 		g.Add(func() error {
+			level.Info(logger).Log("msg", "starting internal server")
 			return internalSrv.ListenAndServe()
 		}, func(error) {
 			ctx, cancel := context.WithTimeout(context.Background(), gracePeriod)
 			defer cancel()
 
 			if err := internalSrv.Shutdown(ctx); err != nil {
-				level.Error(logger).Log("msg", "internal server shutdown failed")
+				level.Error(logger).Log("msg", "internal server shutdown")
 			}
 		})
 	}
 
 	if err := g.Run(); err != nil {
-		level.Error(logger).Log("msg", "run group failed", "err", err)
+		level.Error(logger).Log("msg", "run group", "err", err)
 		os.Exit(1)
 	}
 }
@@ -204,6 +217,7 @@ func parseFlags() config {
 		cfg        = config{}
 		rawTargets string
 	)
+
 	flag.StringVar(&cfg.debug.name, "debug.name", "observable-remote-write-backend",
 		"A name to add as a prefix to log lines.")
 	flag.IntVar(&cfg.debug.mutexProfileFraction, "debug.mutex-profile-fraction", 10,
@@ -222,15 +236,14 @@ func parseFlags() config {
 		"The address on which the internal server listens.")
 	flag.Parse()
 
-	var targetURLs []url.URL
 	for _, addr := range strings.Split(rawTargets, ",") {
 		u, err := url.Parse(addr)
 		if err != nil {
 			stdlog.Fatalf("failed to parse target %v; err: %v", addr, err)
 		}
-		targetURLs = append(targetURLs, *u)
+
+		cfg.server.targets = append(cfg.server.targets, *u)
 	}
-	cfg.server.targets = targetURLs
 
 	return cfg
 }
@@ -240,7 +253,7 @@ func interrupt(logger log.Logger, cancel <-chan struct{}) error {
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case s := <-c:
-		level.Info(logger).Log("msg", "caught signal. Exiting.", "signal", s)
+		level.Info(logger).Log("msg", "caught signal, shutting down", "signal", s)
 		return nil
 	case <-cancel:
 		return errCancelled

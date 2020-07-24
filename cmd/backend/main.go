@@ -27,6 +27,7 @@ import (
 
 	"github.com/kakkoyun/observable-remote-write/internal"
 	internalhttp "github.com/kakkoyun/observable-remote-write/internal/http"
+	"github.com/kakkoyun/observable-remote-write/internal/http/middleware"
 )
 
 // gracePeriod specify graceful shutdown period.
@@ -83,10 +84,17 @@ func main() {
 	g := &run.Group{}
 	p := internalhttp.NewProbe(logger)
 	{
+		metrics := middleware.NewMetricsMiddleware(reg)
 		// Main server to listen for public APIs.
 		mux := http.NewServeMux()
-		mux.Handle("/receive", internalhttp.NewMetricsMiddleware(reg).NewHandler(
-			"receive", http.HandlerFunc(receive(logger))),
+		mux.Handle("/receive",
+			metrics.NewHandler("/receive")(
+				middleware.Logger(logger)(
+					middleware.RequestID(
+						receive(logger),
+					),
+				),
+			),
 		)
 		srv := &http.Server{
 			Addr:    cfg.server.listen,
@@ -101,7 +109,7 @@ func main() {
 			defer cancel()
 
 			if err := srv.Shutdown(ctx); err != nil {
-				level.Error(logger).Log("msg", "server shutdown failed")
+				level.Error(logger).Log("msg", "server shutdown")
 			}
 		})
 	}
@@ -135,40 +143,51 @@ func main() {
 			Handler: mux,
 		}
 		g.Add(func() error {
+			level.Info(logger).Log("msg", "starting internal server")
 			return internalSrv.ListenAndServe()
 		}, func(error) {
 			ctx, cancel := context.WithTimeout(context.Background(), gracePeriod)
 			defer cancel()
 
 			if err := internalSrv.Shutdown(ctx); err != nil {
-				level.Error(logger).Log("msg", "internal server shutdown failed")
+				level.Error(logger).Log("msg", "internal server shutdown")
 			}
 		})
 	}
 
 	if err := g.Run(); err != nil {
-		level.Error(logger).Log("msg", "run group failed", "err", err)
+		level.Error(logger).Log("msg", "run group", "err", err)
 		os.Exit(1)
 	}
 }
 
-func receive(logger log.Logger) func(w http.ResponseWriter, r *http.Request) {
+func receive(logger log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		logger = log.With(logger, "request-id", middleware.RequestIDFromContext(r.Context())) // TODO: Check!
+
 		compressed, err := ioutil.ReadAll(r.Body)
+		defer internal.ExhaustCloseWithLogOnErr(logger, r.Body) // TODO: Check!
+
 		if err != nil {
+			level.Warn(logger).Log("msg", "http read", "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+
 			return
 		}
 
 		reqBuf, err := snappy.Decode(nil, compressed)
 		if err != nil {
+			level.Warn(logger).Log("msg", "snappy decode", "err", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
+
 			return
 		}
 
 		var req prompb.WriteRequest
 		if err := proto.Unmarshal(reqBuf, &req); err != nil {
+			level.Warn(logger).Log("msg", "proto unmarshalling", "err", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
+
 			return
 		}
 
