@@ -21,7 +21,7 @@ import (
 	"github.com/prometheus/common/version"
 
 	"github.com/kakkoyun/observable-remote-write/internal"
-	"github.com/kakkoyun/observable-remote-write/pkg/exthttp"
+	internalhttp "github.com/kakkoyun/observable-remote-write/internal/http"
 )
 
 // gracePeriod specify graceful shutdown period.
@@ -46,7 +46,6 @@ type debugConfig struct {
 type serverConfig struct {
 	listen         string
 	listenInternal string
-	healthCheckURL string
 }
 
 func main() {
@@ -77,18 +76,10 @@ func main() {
 
 	// Initialize run group.
 	g := &run.Group{}
+	p := internalhttp.NewProbe(logger)
 	{
-		// Server listen for proxy.
+		// Main server to listen for public APIs.
 		mux := http.NewServeMux()
-
-		// Register metrics server.
-		mux.Handle("/metrics", exthttp.NewMetricsMiddleware(reg).NewHandler(
-			"metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
-		))
-
-		// Register pprof endpoints.
-		registerProfiler(mux)
-
 		srv := &http.Server{
 			Addr:    cfg.server.listen,
 			Handler: mux,
@@ -96,8 +87,11 @@ func main() {
 
 		g.Add(func() error {
 			level.Info(logger).Log("msg", "starting server")
+			p.Ready()
 			return srv.ListenAndServe()
-		}, func(error) {
+		}, func(err error) {
+			p.NotReady(err)
+
 			ctx, cancel := context.WithTimeout(context.Background(), gracePeriod)
 			defer cancel()
 
@@ -117,9 +111,46 @@ func main() {
 		})
 	}
 
+	// Add internal server.
+	{
+		// Internal server to expose introspection APIs.
+		mux := http.NewServeMux()
+
+		// Register metrics server.
+		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+
+		// Register pprof endpoints.
+		registerProfiler(mux)
+
+		// Register health checks.
+		registerProbes(mux, p)
+
+		internalSrv := &http.Server{
+			Addr:    cfg.server.listenInternal,
+			Handler: mux,
+		}
+		g.Add(func() error {
+			return internalSrv.ListenAndServe()
+		}, func(error) {
+			ctx, cancel := context.WithTimeout(context.Background(), gracePeriod)
+			defer cancel()
+
+			if err := internalSrv.Shutdown(ctx); err != nil {
+				level.Error(logger).Log("msg", "internal server shutdown failed")
+			}
+		})
+	}
+
 	if err := g.Run(); err != nil {
 		level.Error(logger).Log("msg", "run group failed", "err", err)
 		os.Exit(1)
+	}
+}
+
+func registerProbes(mux *http.ServeMux, p *internalhttp.Probe) {
+	if p != nil {
+		mux.Handle("/-/healthy", p.HealthyHandler())
+		mux.Handle("/-/ready", p.ReadyHandler())
 	}
 }
 
@@ -150,8 +181,6 @@ func parseFlags() config {
 		"The address on which the public server listens.")
 	flag.StringVar(&cfg.server.listenInternal, "web.internal.listen", ":8091",
 		"The address on which the internal server listens.")
-	flag.StringVar(&cfg.server.healthCheckURL, "web.health-check.url", "http://localhost:8090",
-		"The URL against which to run health checks.")
 	flag.Parse()
 
 	return cfg

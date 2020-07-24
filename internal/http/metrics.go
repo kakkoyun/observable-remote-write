@@ -1,4 +1,4 @@
-package exthttp
+package http
 
 import (
 	"net/http"
