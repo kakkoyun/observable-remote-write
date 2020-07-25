@@ -76,8 +76,8 @@ func main() {
 
 	// Create and install Jaeger export pipeline.
 	traceProvider, closer, err := jaeger.NewExportPipeline(
-		// jaeger.WithAgentEndpoint("http://127.0.0.1:6831"), // TODO: 6832, configurable?
-		jaeger.WithCollectorEndpoint("http://127.0.0.1:14268/api/traces"), // TODO: default port?
+		// jaeger.WithAgentEndpoint("http://127.0.0.1:6831"), // OR: 6832
+		jaeger.WithCollectorEndpoint("http://127.0.0.1:14268/api/traces"),
 		jaeger.WithProcess(jaeger.Process{
 			ServiceName: serviceName,
 			Tags: []kv.KeyValue{

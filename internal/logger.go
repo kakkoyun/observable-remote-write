@@ -12,6 +12,7 @@ const (
 	LogFormatJSON   = "json"
 )
 
+// NewLogger creates a default configured logger for internal use.
 func NewLogger(logLevel, logFormat, debugName string) log.Logger {
 	var (
 		logger log.Logger

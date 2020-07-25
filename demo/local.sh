@@ -13,8 +13,8 @@ TARGETS=""
 for i in $(seq 0 2); do
   (
     backend \
-      --web.listen=0.0.0.0:808${i} \
-      --web.internal.listen=0.0.0.0:818${i}
+      --web.listen=0.0.0.0:808"${i}" \
+      --web.internal.listen=0.0.0.0:818"${i}"
   ) &
   TARGETS="${TARGETS},http://127.0.0.1:808${i}/receive"
 done
@@ -38,10 +38,10 @@ done
 
 # Start three Prometheus servers monitoring themselves and remote write metrics.
 for i in $(seq 0 2); do
-  rm -rf data/source_prom${i}
-  mkdir -p data/source_prom${i}/
+  rm -rf data/source_prom"${i}"
+  mkdir -p data/source_prom"${i}"/
 
-  cat >data/source_prom${i}/prometheus.yml <<-EOF
+  cat >data/source_prom"${i}"/prometheus.yml <<-EOF
 global:
   external_labels:
     prometheus: prom-${i}
@@ -52,20 +52,20 @@ scrape_configs:
   scrape_interval: 5s
   static_configs:
   - targets:
-    - "127.0.0.1:5909${i}"
+    - "127.0.0.1:5909${i}
 remote_write:
 - url: http://127.0.0.1:8090/receive
 EOF
 
   (
     ${PROMETHEUS} \
-      --config.file data/source_prom${i}/prometheus.yml \
-      --storage.tsdb.path data/source_prom${i} \
+      --config.file data/source_prom"${i}"/prometheus.yml \
+      --storage.tsdb.path data/source_prom"${i}" \
       --log.level warn \
       --web.enable-lifecycle \
       --storage.tsdb.min-block-duration=2h \
       --storage.tsdb.max-block-duration=2h \
-      --web.listen-address 0.0.0.0:5909${i}
+      --web.listen-address 0.0.0.0:5909"${i}"
   ) &
   sleep 0.25
 done
@@ -104,6 +104,10 @@ EOF
     --storage.tsdb.min-block-duration=2h \
     --storage.tsdb.max-block-duration=2h \
     --web.listen-address 0.0.0.0:9091
+) &
+
+(
+  ${JAEGER}
 ) &
 
 wait
