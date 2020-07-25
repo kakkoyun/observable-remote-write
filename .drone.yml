@@ -19,6 +19,7 @@ steps:
     pull: always
     image: golang:1.14
     commands:
+      - apt-get update && apt-get install unzip
       - make test
 
   - name: build
