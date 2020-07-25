@@ -103,7 +103,7 @@ fix: $(GOLANGCI_LINT) format ; $(info $(M) running fix )
 .PHONY: test-integration
 test-integration: ## Runs integration tests
 test-integration: setup build ; $(info $(M) running integration tests)
-	PATH=$$PATH:$$(BIN_DIR) ./test/integration.sh
+	PATH=$$PATH:$(BIN_DIR) ./test/integration.sh
 
 .PHONY: test-unit
 test-unit: ## Runs unit tests
